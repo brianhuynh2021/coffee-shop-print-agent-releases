@@ -54,7 +54,9 @@ jobs:
 
       - name: Test label printing
         shell: powershell
-        run: python print-agent/test_label_sheets.py
+        run: |
+          python -m pip install pillow
+          python print-agent/test_label_sheets.py
 
       - name: Build application
         shell: powershell
