@@ -1,0 +1,91 @@
+name: Build printer connection
+
+# Repo public chạy Actions miễn phí, repo code (business-platform-web) là private và hết
+# phút miễn phí. Nên build ở đây: kéo code Agent từ repo private bằng SOURCE_REPO_TOKEN,
+# đóng gói bộ cài, phát hành ngay trong repo này. Code Agent không được commit vào đây.
+#
+# Chạy: gh workflow run build-print-agent.yml -R brianhuynh2021/coffee-shop-print-agent-releases -f tag=print-agent-v1.0.8
+# Chỉ người có quyền ghi repo mới chạy được; không có trigger pull_request nên fork
+# không đọc được secret.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag trong business-platform-web, ví dụ print-agent-v1.0.8"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-print-agent
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag }}
+    defaults:
+      run:
+        working-directory: src/backend
+
+    steps:
+      - name: Check tag
+        working-directory: .
+        shell: powershell
+        run: |
+          if ($env:TAG -notmatch '^print-agent-v\d+\.\d+\.\d+$') { throw "Tag phải có dạng print-agent-v1.2.3" }
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          repository: brianhuynh2021/business-platform-web
+          ref: ${{ inputs.tag }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: src
+          persist-credentials: false
+          sparse-checkout: backend/print-agent
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test label printing
+        shell: powershell
+        run: python print-agent/test_label_sheets.py
+
+      - name: Build application
+        shell: powershell
+        run: |
+          # Tag "print-agent-v1.0.4" -> "1.0.4": ghi vào metadata của exe.
+          $version = $env:TAG -replace '^print-agent-v', ''
+          ./print-agent/build.ps1 -Version $version
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $version = $env:TAG -replace '^print-agent-v', ''
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "print-agent\installer.iss"
+
+      - name: Verify installer
+        shell: powershell
+        run: |
+          if (-not (Test-Path "release/CoffeeShopPrintAgentSetup.exe")) {
+            throw "Không tạo được bộ cài"
+          }
+
+      - name: Publish release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:TAG "release/CoffeeShopPrintAgentSetup.exe" `
+            --repo "${{ github.repository }}" `
+            --title "Ket noi may in $env:TAG" `
+            --notes "Bo cai ket noi may in $env:TAG."
